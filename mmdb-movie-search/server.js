@@ -1,14 +1,210 @@
 // server.js - MongoDB Movie Database Backend Server
-require('dotenv').config();
-
 const express = require('express');
+const { MongoClient } = require('mongodb');
 const cors = require('cors');
-const utilsModule = require('./utils');
-const appModule = require('./app');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Configuration from .env
+const CONFIG = {
+    mongodbUri: process.env.MONGODB_URI,
+    database: process.env.DATABASE_NAME || 'sample_mflix',
+    collectionName: process.env.COLLECTION_NAME || 'movies',
+    searchIndexName: process.env.SEARCH_INDEX_NAME || 'default',
+    port: process.env.PORT || 3000,
+    host: process.env.HOST || 'localhost'
+};
+
+let mongoClient;
+let moviesCollection;
+
+// ============================================
+// DATABASE CONNECTION
+// ============================================
+
+async function connectToDatabase() {
+    try {
+        mongoClient = new MongoClient(CONFIG.mongodbUri);
+        await mongoClient.connect();
+        const db = mongoClient.db(CONFIG.database);
+        moviesCollection = db.collection(CONFIG.collectionName);
+        console.log('✓ Connected to MongoDB Atlas');
+        console.log(`✓ Database: ${CONFIG.database}`);
+        console.log(`✓ Collection: ${CONFIG.collectionName}`);
+    } catch (error) {
+        console.error('✗ MongoDB connection error:', error.message);
+        process.exit(1);
+    }
+}
+
+// ============================================
+// SEARCH FUNCTIONS
+// ============================================
+
+/**
+ * Exact Match Search
+ * Searches for exact matches in the specified field
+ * @param {string} query - Search query
+ * @param {string} field - Field to search (title, cast, plot)
+ * @param {string} sort - Sort option (year, rating, or empty)
+ * @returns {Promise<Array>} Array of matching movies
+ */
+async function exactMatchSearch(query, field, sort) {
+    try {
+        const searchQuery = {[field]: query};
+        const sortQuery = {[sort]: -1};
+
+        let cursor;
+
+        if(sort && sort !== '') {
+            cursor = moviesCollection.find(searchQuery).sort(sortQuery);
+        } else {
+            cursor = moviesCollection.find(searchQuery);
+        }
+
+        const results = await cursor.toArray();
+        console.log(`✓ Exact match search: "${query}" in field "${field}" - Found ${results.length} results`);
+        return results;
+    } catch (error) {
+        console.error('✗ Exact match search error:', error);
+        throw error;
+    }
+}
+
+/**
+ * Full Text Search using MongoDB Atlas Search
+ * Performs text search across movie titles, plots, and full plots with scoring.
+ * 
+ * @param {string} query - Search query
+ * @returns {Promise<Array>} Array of matching movies with relevance scores
+ */
+async function fullTextSearch(query) {
+    try {
+        // PLACEHOLDER: User will implement Atlas Search here
+        // Currently returns empty results by default
+
+        let cursor = moviesCollection.aggregate([
+            
+            // Search Query Labs: Enter aggregation stages code here
+            // ... Your code goes here ...
+
+        ]);
+
+        const results = await cursor.toArray();
+        console.log(`ℹ Full text search: "${query}" - Found ${results.length} results`);
+        return results;
+    } catch (error) {
+        console.error('✗ Full text search error:', error);
+        throw error;
+    }
+}
+
+/**
+ * Performs autocomplete search for movie titles using MongoDB Atlas Search.
+ * 
+ * @param {string} query - The search query string to autocomplete
+ * @returns {Promise<Array>} Array of matching movie documents with title field
+ * @throws {Error} Throws an error if the autocomplete search operation fails
+ * 
+ * @example
+ * const results = await autocompleteTitle("The God");
+ * // Returns: [{ _id: ..., title: "The Godfather" }, ...]
+ */
+async function autocompleteTitle(query) {
+    try {
+        // PLACEHOLDER: User will implement Atlas Search here
+        // Currently returns empty results by default
+
+        // Autocomplete Lab: Uncomment the following code to set the value for cursor.
+        // let cursor = moviesCollection.aggregate([
+        //     { $search: {
+        //         "index": CONFIG.searchIndexName,
+        //         "autocomplete": { "query": query, "path": "title" }
+        //     } },
+        //     { $project: { title: 1 } },
+        //     { $limit: 8 }
+        // ]);
+        const results = await cursor.toArray();
+        
+        console.log(`ℹ Autocomplete search: "${query}" - Found ${results.length} results`);
+        return results;
+    } catch (error) {
+        console.error('✗ Autocomplete search error:', error);
+        throw error;
+    }
+}
+
+/**
+ * Performs faceted search to get aggregated counts by genres, ratings, and release dates.
+ * Uses MongoDB Atlas Search $searchMeta to generate facets without returning documents.
+ * 
+ * @param {string} query - The search query string
+ * @returns {Promise<Array>} Array containing facet results with buckets for genres, ratings, and release dates
+ * 
+ * @example
+ * const facets = await searchFacets("action");
+ * // Returns: [{ facet: { genres: { buckets: [...] }, ratings: { buckets: [...] }, release_dates: { buckets: [...] } } }]
+ */
+async function searchFacets(query) {
+    try {
+        // PLACEHOLDER: User will implement Atlas Search faceting here
+        // Currently returns empty array by default
+
+        // Facets Lab: Uncomment the following code to set the value for cursor.
+        // const cursor = moviesCollection.aggregate([
+        //     {
+        //         "$searchMeta": {
+        //             "index": CONFIG.searchIndexName,
+        //             "facet": {
+        //                 "operator": {
+        //                     // Facets Lab: Below this line, copy-paste the operator from fullTextSearch()
+
+        //                 },
+        //                 "facets": {
+        //                     "genres": {
+        //                         "type": "string",
+        //                         "path": "genres",
+        //                         "numBuckets": 3
+        //                     },
+        //                     "ratings": {
+        //                         "type": "number",
+        //                         "path": "imdb.rating",
+        //                         "boundaries": [0, 5, 8, 10]
+        //                     },
+        //                     "release_dates": {
+        //                         "type": "date",
+        //                         "path": "released",
+        //                         "boundaries": [
+        //                             new Date("2000-01-01"),
+        //                             new Date("2005-01-01"),
+        //                             new Date("2015-01-01"),
+        //                             new Date("2020-01-01")
+        //                         ],
+        //                         "default": "older"
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // ]);
+        
+        let results;
+        try{
+            results = await cursor.toArray();
+        } catch(e){
+            results = [];
+        }
+        
+        console.log(`ℹ Facet search: "${query}" - Found ${results.length} results`);
+        return results;
+    } catch (error) {
+        console.error('✗ Facet search error:', error);
+        throw error;
+    }
+}
 
 // ============================================
 // API ENDPOINTS
@@ -17,7 +213,7 @@ app.use(express.json());
 /**
  * POST /api/search/exact
  * Exact match search endpoint
- *
+ * 
  * Request body:
  * {
  *   "query": "string",
@@ -28,15 +224,15 @@ app.use(express.json());
 app.post('/api/search/exact', async (req, res) => {
     try {
         const { query, field, sort } = req.body;
-
+        
         if (!query || !field) {
-            return res.status(400).json({
+            return res.status(400).json({ 
                 error: 'Query and field are required',
                 example: { query: 'The Matrix', field: 'title', sort: 'year' }
             });
         }
-
-        const results = await appModule.exactMatchSearch(query, field, sort || '');
+        
+        const results = await exactMatchSearch(query, field, sort || '');
         res.json(results);
     } catch (error) {
         console.error('API error:', error);
@@ -51,18 +247,18 @@ app.post('/api/search/exact', async (req, res) => {
 app.post('/api/suggestions', async (req, res) => {
     try {
         const { query } = req.body;
-
+        
         if (!query || query.length < 2) {
-            return res.status(400).json({
+            return res.status(400).json({ 
                 error: 'Query must be at least 2 characters'
             });
         }
-
-        const results = await appModule.autocompleteTitle(query);
-
+        
+        const results = await autocompleteTitle(query);
+        
         // Extract just the titles
         const suggestions = results.map(doc => doc.title);
-
+        
         console.log(`✓ Autocomplete suggestions: "${query}" - Found ${suggestions.length} suggestions`);
         res.json(suggestions);
     } catch (error) {
@@ -74,7 +270,7 @@ app.post('/api/suggestions', async (req, res) => {
 /**
  * POST /api/search/fulltext
  * Full text search endpoint
- *
+ * 
  * Request body:
  * {
  *   "query": "string"
@@ -83,73 +279,15 @@ app.post('/api/suggestions', async (req, res) => {
 app.post('/api/search/fulltext', async (req, res) => {
     try {
         const { query } = req.body;
-
+        
         if (!query) {
-            return res.status(400).json({
+            return res.status(400).json({ 
                 error: 'Query is required',
                 example: { query: 'action adventure' }
             });
         }
-
-        const results = await appModule.fullTextSearch(query);
-        res.json(results);
-    } catch (error) {
-        console.error('API error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * POST /api/search/vector
- * Vector search endpoint
- *
- * Request body:
- * {
- *   "query": "string"
- * }
- */
-app.post('/api/search/vector', async (req, res) => {
-    try {
-        const { query } = req.body;
-
-        if (!query) {
-            return res.status(400).json({
-                error: 'Query is required',
-                example: { query: 'action adventure' }
-            });
-        }
-
-        const results = await appModule.vectorSearch(query);
-        res.json(results);
-    } catch (error) {
-        console.error('API error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * POST /api/search/hybrid
- * Hybrid search endpoint
- *
- * Request body:
- * {
- *   "query": "string",
- *   "ftsWeight": number,
- *   "vectorWeight": number
- * }
- */
-app.post('/api/search/hybrid', async (req, res) => {
-    try {
-        const { query, ftsWeight, vectorWeight, hybridApproach } = req.body;
-
-        if (!query) {
-            return res.status(400).json({
-                error: 'Query is required',
-                example: { query: 'action adventure', ftsWeight: 0.5, vectorWeight: 0.5 }
-            });
-        }
-
-        const results = await appModule.hybridSearch(query, ftsWeight, vectorWeight, hybridApproach);
+        
+        const results = await fullTextSearch(query);
         res.json(results);
     } catch (error) {
         console.error('API error:', error);
@@ -160,7 +298,7 @@ app.post('/api/search/hybrid', async (req, res) => {
 /**
  * POST /api/search/facets
  * Get faceted search results for genres, ratings, and release dates
- *
+ * 
  * Request body:
  * {
  *   "query": "string"
@@ -169,15 +307,15 @@ app.post('/api/search/hybrid', async (req, res) => {
 app.post('/api/search/facets', async (req, res) => {
     try {
         const { query } = req.body;
-
+        
         if (!query) {
-            return res.status(400).json({
+            return res.status(400).json({ 
                 error: 'Query is required',
                 example: { query: 'action' }
             });
         }
-
-        const results = await appModule.searchFacets(query);
+        
+        const results = await searchFacets(query);
         res.json(results);
     } catch (error) {
         console.error('API error:', error);
@@ -186,132 +324,36 @@ app.post('/api/search/facets', async (req, res) => {
 });
 
 /**
- * POST /discover
- * RAG chat endpoint for discussing current search results.
- *
- * Request body:
- * {
- *   "query": "string",
- *   "context": [{ "title": "string", "year": number, "plot": "string", "cast": ["string"] }]
- * }
- *
- * Response body:
- * {
- *   "response": "string"
- * }
- */
-app.post('/discover', async (req, res) => {
-    try {
-        if (!utilsModule.getConfig('ragEnabled')) {
-            return res.status(403).json({ error: 'RAG is disabled' });
-        }
-
-        const { query, context } = req.body;
-
-        if (!query || typeof query !== 'string' || query.trim().length === 0) {
-            return res.status(400).json({
-                error: 'Query is required',
-                example: { query: 'Suggest suspense movies from these results', context: [] }
-            });
-        }
-
-        if (!Array.isArray(context)) {
-            return res.status(400).json({
-                error: 'Context must be an array',
-                example: { query: 'What should I watch?', context: [] }
-            });
-        }
-
-        const responseText = await appModule.discoverResponse(query, context);
-
-        res.json({ response: responseText });
-    } catch (error) {
-        console.error('Discover API error:', error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/config
- * Lightweight frontend config endpoint.
- */
-app.get('/api/config', (req, res) => {
-    res.json({
-        autocompleteEnabled: utilsModule.getConfig('autocompleteEnabled'),
-        facetsEnabled: utilsModule.getConfig('facetsEnabled'),
-        vectorSearchEnabled: utilsModule.getConfig('vectorSearchEnabled'),
-        ragEnabled: utilsModule.getConfig('ragEnabled'),
-        agenticEnabled: utilsModule.getConfig('agenticEnabled')
-    });
-});
-
-/**
  * GET /api/health
  * Health check endpoint
  */
 app.get('/api/health', (req, res) => {
-    res.json({
+    res.json({ 
         status: 'Server is running',
         timestamp: new Date(),
         config: {
-                database: utilsModule.getConfig('database'),
-                collection: utilsModule.getConfig('collectionName'),
-                embeddedCollection: utilsModule.getConfig('embeddedCollectionName')
+            database: CONFIG.database,
+            collection: CONFIG.collectionName
         }
     });
 });
 
 /**
- * POST /api/search/chatbot
- * AI Mode search endpoint for conversational queries about movies.
- *
- * Request body:
- * {
- *   "query": "string",
- *   "aiMode": "rag|full"
- * }
- *
- * Response body:
- * {
- *   "response": "string"
- * }
+ * GET /
+ * Serve static files (optional - for testing)
  */
-app.post('/api/search/chatbot', async (req, res) => {
-    try {
-        if (!utilsModule.getConfig('ragEnabled')) {
-            return res.status(403).json({ error: 'AI Mode is disabled' });
-        }
-
-        const { query, aiMode, sessionId } = req.body;
-
-        if (!query || typeof query !== 'string' || query.trim().length === 0) {
-            return res.status(400).json({
-                error: 'Query is required',
-                example: { query: 'What are the best action movies?', aiMode: 'rag' }
-            });
-        }
-
-        const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
-            ? sessionId.trim()
-            : `${req.ip || 'anonymous'}:${req.get('user-agent') || 'unknown'}`;
-
-        const responseText = await appModule.aiChatResponse(query, aiMode, resolvedSessionId);
-
-        res.json({ response: responseText });
-    } catch (error) {
-        console.error('AI Chat API error:', error.message);
-        res.status(500).json({ error: error.message });
-    }
+app.get('/', (req, res) => {
+    res.send('MongoDB Movie Database API is running. Open index.html in your browser.');
 });
 
 // ============================================
 // START SERVER
 // ============================================
 
-const PORT = utilsModule.getConfig('port') || 3000;
-const HOST = utilsModule.getConfig('host') || 'localhost';
+const PORT = CONFIG.port || 3000;
+const HOST = CONFIG.host || 'localhost';
 
-utilsModule.connectToDatabase(utilsModule.getAllConfig()).then(() => {
+connectToDatabase().then(() => {
     app.listen(PORT, HOST, () => {
         console.log('');
         console.log('╔════════════════════════════════════════╗');
@@ -329,16 +371,15 @@ utilsModule.connectToDatabase(utilsModule.getAllConfig()).then(() => {
     process.exit(1);
 });
 
-utilsModule.initializeLLM().catch(err => {
-    console.error('Failed to initialize LLM:', err);
-});
-
 // ============================================
 // GRACEFUL SHUTDOWN
 // ============================================
 
 process.on('SIGINT', async () => {
     console.log('\n⏹ Shutting down gracefully...');
-    await utilsModule.closeDatabase();
+    if (mongoClient) {
+        await mongoClient.close();
+    }
     process.exit(0);
 });
+
