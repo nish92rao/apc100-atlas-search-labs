@@ -27,7 +27,7 @@
                     autocomplete="off"
                 >
                 <!-- Optional: Uncomment to enable autocomplete suggestions -->
-                <!-- <div id="suggestionsList" class="suggestions-list"></div> -->
+                <div id="suggestionsList" class="suggestions-list" style="display: none;"></div>
                 
                 <button class="btn btn-primary" id="searchBtn">Search</button>
                 <button class="btn btn-secondary" id="resetBtn">Reset</button>
@@ -37,18 +37,30 @@
             <div class="search-options">
                 <div class="radio-group">
                     <label>
-                        <input type="radio" name="searchType" value="fulltext" checked>
-                        Full Text Search
+                        <input type="radio" name="searchType" value="exact" checked>
+                        Exact Match
                     </label>
                     <label>
-                        <input type="radio" name="searchType" value="exact">
-                        Exact Match
+                        <input type="radio" name="searchType" value="fulltext">
+                        Full Text Search
+                    </label>
+                    <label id="vectorSearchLabel" style="display: none;">
+                        <input type="radio" name="searchType" value="vector">
+                        Vector Search
+                    </label>
+                    <label id="hybridSearchLabel" style="display: none;">
+                        <input type="radio" name="searchType" value="hybrid">
+                        Hybrid Search
+                    </label>
+                    <label id="aiModeLabel" style="display: none;">
+                        <input type="radio" name="searchType" value="ai">
+                        AI Mode
                     </label>
                 </div>
             </div>
 
-            <!-- Conditional Fields (Hidden by default) -->
-            <div class="conditional-fields" id="conditionalFields" style="display: none;">
+            <!-- Conditional Fields (Shown for Exact Match only) -->
+            <div class="conditional-fields" id="conditionalFields">
                 <div class="field-group">
                     <label for="fieldSelect">Field:</label>
                     <select id="fieldSelect">
@@ -67,8 +79,53 @@
                 </div>
             </div>
 
+            <!-- Conditional Fields (Shown for Hybrid Search only) -->
+            <div class="hybrid-conditional-fields" id="hybridConditionalFields" style="display: none;">
+                <div class="field-group">
+                    <label for="ftsWeightSlider">Weight:</label>
+                    <div class="hybrid-weight-control">
+                        <input
+                            type="range"
+                            id="ftsWeightSlider"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value="0.5"
+                        >
+                        <div class="hybrid-weight-labels hybrid-weight-legend">
+                            <span id="ftsWeightLabel">FTS: 0.50</span>
+                            <span id="vectorWeightLabel">Vector: 0.50</span>
+                        </div>
+                        <input type="hidden" id="ftsWeight" value="0.5">
+                        <input type="hidden" id="vectorWeight" value="0.5">
+                    </div>
+                </div>
+                <div class="field-group">
+                    <label for="hybridApproach">Approach:</label>
+                    <select id="hybridApproach">
+                        <!-- $rankFusion and $scoreFusion are available only on v8.3 and above. Uncomment the corresponding lines to use them. -->
+                        <option value="rrf">Reciprocal Rank Fusion (RRF)</option>
+                        <!-- <option value="rankFusion">$rankFusion</option> -->
+                        <option value="rsf">Relative Score Fusion (RSF)</option>
+                        <!-- <option value="scoreFusion">$scoreFusion</option> -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Conditional Fields (Shown for AI Mode only) -->
+            <div class="ai-conditional-fields" id="aiConditionalFields" style="display: none;">
+                <div class="field-group">
+                    <label for="aiMode">Mode:</label>
+                    <select id="aiMode">
+                        <option value="rag">RAG</option>
+                        <option value="agentic" id="agenticOption" style="display: none;">Agentic AI</option>
+                    </select>
+                </div>
+            </div>
+            <br>
+
             <!-- View Toggle -->
-            <div class="view-toggle">
+            <div class="view-toggle" id="viewToggle">
                 <button class="view-btn active" id="listViewBtn" title="List View">☰</button>
                 <button class="view-btn" id="tileViewBtn" title="Tile View">⊞</button>
             </div>
@@ -108,10 +165,34 @@
         </div>
     </div>
 
+    <!-- RAG Chat Modal -->
+    <div class="chat-modal-overlay" id="discoverModalOverlay">
+        <div class="chat-modal" id="discoverModal">
+            <button class="chat-modal-close" id="discoverModalClose">&times;</button>
+            <div class="chat-modal-header">Discover Results</div>
+            <div class="chat-messages" id="discoverMessages"></div>
+            <div class="chat-input-row">
+                <input
+                    type="text"
+                    id="discoverInput"
+                    class="chat-input"
+                    placeholder="Ask about these results..."
+                    autocomplete="off"
+                >
+                <button class="btn btn-primary" id="discoverAskBtn">Ask</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Configuration
         const CONFIG = {
-            apiBaseUrl: 'http://localhost:3000'
+            apiBaseUrl: 'http://localhost:3000',
+            autocompleteEnabled: false,
+            facetsEnabled: false,
+            vectorSearchEnabled: false,
+            ragEnabled: false,
+            agenticEnabled: false
         };
 
         // State
@@ -120,11 +201,34 @@
         const resultsPerPage = 16;
         let isListView = true;
         let suggestionTimeout;
+        let discoverMessagesState = [];
+        let aiChatMessages = [];
+        let configReadyPromise = null;
+
+        function toFeatureFlag(value) {
+            if (typeof value === 'boolean') return value;
+            if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
+            if (typeof value === 'number') return value === 1;
+            return false;
+        }
+
+        function getOrCreateAgentSessionId() {
+            const key = 'mmdbAgentSessionId';
+            let sessionId = sessionStorage.getItem(key);
+            if (!sessionId) {
+                sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+                    ? crypto.randomUUID()
+                    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                sessionStorage.setItem(key, sessionId);
+            }
+            return sessionId;
+        }
 
         // DOM Elements
         const searchInput = document.getElementById('searchInput');
         const searchBtn = document.getElementById('searchBtn');
         const resetBtn = document.getElementById('resetBtn');
+        const aiModeLabel = document.getElementById('aiModeLabel');
         const resultsSection = document.getElementById('resultsSection');
         const listViewBtn = document.getElementById('listViewBtn');
         const tileViewBtn = document.getElementById('tileViewBtn');
@@ -132,8 +236,25 @@
         const modalClose = document.getElementById('modalClose');
         const modalContent = document.getElementById('modalContent');
         const conditionalFields = document.getElementById('conditionalFields');
+        const hybridConditionalFields = document.getElementById('hybridConditionalFields');
+        const aiConditionalFields = document.getElementById('aiConditionalFields');
+        const viewToggle = document.getElementById('viewToggle');
         const searchTypeRadios = document.querySelectorAll('input[name="searchType"]');
         const suggestionsList = document.getElementById('suggestionsList');
+        const ftsWeightSlider = document.getElementById('ftsWeightSlider');
+        const ftsWeightField = document.getElementById('ftsWeight');
+        const vectorWeightField = document.getElementById('vectorWeight');
+        const ftsWeightLabel = document.getElementById('ftsWeightLabel');
+        const vectorWeightLabel = document.getElementById('vectorWeightLabel');
+        const hybridApproachSelect = document.getElementById('hybridApproach');
+        const discoverModalOverlay = document.getElementById('discoverModalOverlay');
+        const discoverModalClose = document.getElementById('discoverModalClose');
+        const discoverMessages = document.getElementById('discoverMessages');
+        const discoverInput = document.getElementById('discoverInput');
+        const discoverAskBtn = document.getElementById('discoverAskBtn');
+        const aiModeSelect = document.getElementById('aiMode');
+        const vectorSearchLabel = document.getElementById('vectorSearchLabel');
+        const hybridSearchLabel = document.getElementById('hybridSearchLabel');
 
         // Event Listeners
         searchBtn.addEventListener('click', handleSearch);
@@ -147,23 +268,36 @@
         searchTypeRadios.forEach(radio => {
             radio.addEventListener('change', (e) => {
                 conditionalFields.style.display = e.target.value === 'exact' ? 'flex' : 'none';
+                hybridConditionalFields.style.display = e.target.value === 'hybrid' ? 'flex' : 'none';
+                aiConditionalFields.style.display = e.target.value === 'ai' ? 'flex' : 'none';
+                viewToggle.style.display = e.target.value === 'ai' ? 'none' : 'flex';
+                searchBtn.textContent = e.target.value === 'ai' ? 'Ask' : 'Search';
             });
         });
 
-        // Autocomplete functionality (requires suggestionsList element to be uncommented in HTML)
-        if(suggestionsList != null && suggestionsList != undefined){
+        ftsWeightSlider.addEventListener('input', syncHybridWeights);
+        syncHybridWeights();
+        configReadyPromise = initializeFrontendConfig();
+
+        // Autocomplete functionality
+        if (suggestionsList) {
             searchInput.addEventListener('input', async (e) => {
                 const query = e.target.value.trim();
                 const searchType = document.querySelector('input[name="searchType"]:checked').value;
-                
+
+                if (!CONFIG.autocompleteEnabled) {
+                    suggestionsList.classList.remove('active');
+                    return;
+                }
+
                 // Only show suggestions for full text search
                 if (searchType !== 'fulltext' || query.length < 2) {
                     suggestionsList.classList.remove('active');
                     return;
                 }
-                
+
                 clearTimeout(suggestionTimeout);
-                
+
                 // Debounce requests (wait 300ms after user stops typing)
                 suggestionTimeout = setTimeout(async () => {
                     try {
@@ -172,9 +306,9 @@
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ query })
                         });
-                        
+
                         if (!response.ok) throw new Error('Failed to fetch suggestions');
-                        
+
                         const suggestions = await response.json();
                         displaySuggestions(suggestions);
                     } catch (error) {
@@ -220,9 +354,21 @@
             if (e.target === modalOverlay) closeModal();
         });
         modalClose.addEventListener('click', closeModal);
+        discoverModalOverlay.addEventListener('click', (e) => {
+            if (e.target === discoverModalOverlay) closeDiscoverModal();
+        });
+        discoverModalClose.addEventListener('click', closeDiscoverModal);
+        discoverAskBtn.addEventListener('click', handleDiscoverAsk);
+        discoverInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleDiscoverAsk();
+        });
 
         // Handle Search
         async function handleSearch() {
+            if (configReadyPromise) {
+                await configReadyPromise;
+            }
+
             const searchType = document.querySelector('input[name="searchType"]:checked').value;
             const query = searchInput.value.trim();
 
@@ -247,7 +393,25 @@
                 if (searchType === 'fulltext') {
                     endpoint = '/api/search/fulltext';
                     payload = { query };
-                } else {
+                } else if (searchType === 'vector') {
+                    endpoint = '/api/search/vector';
+                    payload = { query };
+                } else if (searchType === 'hybrid') {
+                    endpoint = '/api/search/hybrid';
+                    payload = {
+                        query,
+                        ftsWeight: parseFloat(ftsWeightField.value),
+                        vectorWeight: parseFloat(vectorWeightField.value),
+                        hybridApproach: hybridApproachSelect.value
+                    };
+                } else if (searchType === 'ai') {
+                    endpoint = '/api/search/chatbot';
+                    payload = {
+                        query,
+                        aiMode: aiModeSelect.value,
+                        sessionId: getOrCreateAgentSessionId()
+                    };
+                } else if (searchType === 'exact') {
                     const field = document.getElementById('fieldSelect').value;
                     const sort = document.getElementById('sortSelect').value;
                     endpoint = '/api/search/exact';
@@ -261,23 +425,119 @@
                 });
 
                 if (!response.ok) throw new Error(`API error: ${response.status}`);
-                
-                currentResults = await response.json();
-                currentPage = 1;
-                
-                // Fetch facets for fulltext search
-                if (searchType === 'fulltext') {
-                    fetchFacets(query);
-                } else {
-                    // Hide facets for exact match search
+
+                if (searchType === 'ai') {
+                    const data = await response.json();
+                    aiChatMessages.push({ role: 'user', text: query });
+                    aiChatMessages.push({
+                        role: 'assistant',
+                        text: typeof data.response === 'string' && data.response.trim().length > 0
+                            ? data.response.trim()
+                            : 'No response received from chatbot.'
+                    });
                     document.getElementById('facetsSection').style.display = 'none';
+                    displayAIChatMessages();
+                } else {
+                    currentResults = await response.json();
+                    currentPage = 1;
+
+                    // Fetch facets only for fulltext endpoint when facets feature is enabled
+                    if (endpoint === '/api/search/fulltext' && CONFIG.facetsEnabled) {
+                        await fetchFacets(query);
+                    } else {
+                        // Hide facets for exact match and other search types
+                        document.getElementById('facetsSection').style.display = 'none';
+                    }
+
+                    displayResults();
                 }
-                
-                displayResults();
             } catch (error) {
                 console.error('Search error:', error);
                 resultsSection.innerHTML = `<div class="empty-state"><p>Error: ${error.message}</p></div>`;
             }
+        }
+
+        async function initializeFrontendConfig() {
+            try {
+                const response = await fetch(`${CONFIG.apiBaseUrl}/api/config`);
+                if (!response.ok) {
+                    throw new Error(`Config API error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                CONFIG.autocompleteEnabled = toFeatureFlag(data && data.autocompleteEnabled);
+                CONFIG.vectorSearchEnabled = toFeatureFlag(data && data.vectorSearchEnabled);
+                CONFIG.facetsEnabled = toFeatureFlag(data && data.facetsEnabled);
+                CONFIG.ragEnabled = toFeatureFlag(data && data.ragEnabled);
+                CONFIG.agenticEnabled = toFeatureFlag(data && data.agenticEnabled);
+                if (suggestionsList) {
+                    suggestionsList.style.display = CONFIG.autocompleteEnabled ? '' : 'none';
+                }
+                if (vectorSearchLabel) {
+                    vectorSearchLabel.style.display = CONFIG.vectorSearchEnabled ? '' : 'none';
+                }
+                if (hybridSearchLabel) {
+                    hybridSearchLabel.style.display = CONFIG.vectorSearchEnabled ? '' : 'none';
+                }
+                const agenticOption = document.getElementById('agenticOption');
+                if (agenticOption) {
+                    agenticOption.style.display = CONFIG.agenticEnabled ? '' : 'none';
+                }
+            } catch (error) {
+                console.warn('Config load failed. Defaulting ragEnabled to false.', error.message);
+                CONFIG.autocompleteEnabled = false;
+                CONFIG.vectorSearchEnabled = false;
+                CONFIG.facetsEnabled = false;
+                CONFIG.ragEnabled = false;
+                CONFIG.agenticEnabled = false;
+                if (suggestionsList) {
+                    suggestionsList.style.display = 'none';
+                }
+                if (vectorSearchLabel) {
+                    vectorSearchLabel.style.display = 'none';
+                }
+                if (hybridSearchLabel) {
+                    hybridSearchLabel.style.display = 'none';
+                }
+            }
+
+            // Update toolbar button visibility if results are already displayed.
+            if (currentResults.length > 0) {
+                displayResults();
+            }
+
+            aiModeLabel.style.display = CONFIG.ragEnabled ? 'flex' : 'none';
+            if (!CONFIG.vectorSearchEnabled) {
+                const selected = document.querySelector('input[name="searchType"]:checked');
+                if (selected && (selected.value === 'vector' || selected.value === 'hybrid')) {
+                    document.querySelector('input[name="searchType"][value="exact"]').checked = true;
+                    conditionalFields.style.display = 'flex';
+                    hybridConditionalFields.style.display = 'none';
+                    aiConditionalFields.style.display = 'none';
+                    viewToggle.style.display = 'flex';
+                    searchBtn.textContent = 'Search';
+                }
+            }
+            if (!CONFIG.ragEnabled) {
+                const selected = document.querySelector('input[name="searchType"]:checked');
+                if (selected && selected.value === 'ai') {
+                    document.querySelector('input[name="searchType"][value="exact"]').checked = true;
+                    conditionalFields.style.display = 'flex';
+                    aiConditionalFields.style.display = 'none';
+                    viewToggle.style.display = 'flex';
+                    searchBtn.textContent = 'Search';
+                }
+            }
+        }
+
+        function syncHybridWeights() {
+            const ftsWeight = parseFloat(ftsWeightSlider.value);
+            const vectorWeight = 1 - ftsWeight;
+
+            ftsWeightField.value = ftsWeight.toFixed(2);
+            vectorWeightField.value = vectorWeight.toFixed(2);
+            ftsWeightLabel.textContent = `FTS: ${ftsWeight.toFixed(2)}`;
+            vectorWeightLabel.textContent = `Vector: ${vectorWeight.toFixed(2)}`;
         }
 
         // Fetch and display facets
@@ -415,7 +675,12 @@
             const end = start + resultsPerPage;
             const pageResults = currentResults.slice(start, end);
 
-            let html = `<div class="results-info">Found ${currentResults.length} result(s)</div>`;
+            let html = '<div class="results-toolbar">';
+            html += `<div class="results-info">Found ${currentResults.length} result(s)</div>`;
+            if (CONFIG.ragEnabled) {
+                html += '<button class="btn btn-primary discover-btn" id="discoverBtn">Discover Results</button>';
+            }
+            html += '</div>';
 
             if (isListView) {
                 html += '<div class="results-list">';
@@ -447,6 +712,11 @@
                     if (movie) openModal(movie);
                 });
             });
+
+            const discoverBtn = document.getElementById('discoverBtn');
+            if (discoverBtn) {
+                discoverBtn.addEventListener('click', openDiscoverModal);
+            }
 
             // Attach pagination listeners
             document.querySelectorAll('.pagination button').forEach(btn => {
@@ -649,8 +919,150 @@
             searchInput.value = '';
             currentResults = [];
             currentPage = 1;
+            discoverMessagesState = [];
+            aiChatMessages = [];
             resultsSection.innerHTML = '<div class="empty-state"><p>Enter a search query to get started</p></div>';
             document.getElementById('facetsSection').style.display = 'none';
+            const selectedSearchType = document.querySelector('input[name="searchType"]:checked')?.value;
+            searchBtn.textContent = selectedSearchType === 'ai' ? 'Ask' : 'Search';
+        }
+
+        function displayAIChatMessages() {
+            let html = '<div class="ai-chat-container">';
+            html += '<div class="ai-chat-messages">';
+            html += aiChatMessages.map(message => {
+                const waitingClass = message.waiting ? ' waiting' : '';
+                const roleClass = message.role === 'user' ? ' user' : ' assistant';
+                return `<div class="ai-chat-message${roleClass}${waitingClass}">${escapeHtml(message.text)}</div>`;
+            }).join('');
+            html += '</div></div>';
+
+            resultsSection.innerHTML = html;
+
+            const aiChatMessagesDiv = document.querySelector('.ai-chat-messages');
+            aiChatMessagesDiv.scrollTop = aiChatMessagesDiv.scrollHeight;
+            searchInput.focus();
+        }
+
+        async function handleAIChatAsk() {
+            const query = searchInput.value.trim();
+            if (!query) {
+                return;
+            }
+
+            aiChatMessages.push({ role: 'user', text: query });
+            const waitingIndex = aiChatMessages.push({ role: 'assistant', text: 'Waiting...', waiting: true }) - 1;
+            searchInput.value = '';
+            displayAIChatMessages();
+
+            try {
+                const response = await fetch(`${CONFIG.apiBaseUrl}/api/search/chatbot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query,
+                        aiMode: aiModeSelect.value,
+                        sessionId: getOrCreateAgentSessionId()
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Chatbot API error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const answer = typeof data.response === 'string' && data.response.trim().length > 0
+                    ? data.response.trim()
+                    : 'No response received from chatbot.';
+
+                aiChatMessages[waitingIndex] = { role: 'assistant', text: answer };
+            } catch (error) {
+                console.error('AI Chat error:', error);
+                aiChatMessages[waitingIndex] = {
+                    role: 'assistant',
+                    text: `I could not complete that request. ${error.message}`
+                };
+            }
+
+            displayAIChatMessages();
+        }
+
+        function openDiscoverModal() {
+            if (!Array.isArray(currentResults) || currentResults.length === 0) {
+                alert('Run a search before using Discover Results.');
+                return;
+            }
+
+            if (discoverMessagesState.length === 0) {
+                discoverMessagesState.push({
+                    role: 'assistant',
+                    text: 'Ask anything about the current results. I will answer using the retrieved movies.'
+                });
+            }
+
+            renderDiscoverMessages();
+            discoverModalOverlay.classList.add('active');
+            document.body.classList.add('modal-open');
+            discoverInput.focus();
+        }
+
+        function closeDiscoverModal() {
+            discoverModalOverlay.classList.remove('active');
+            document.body.classList.remove('modal-open');
+        }
+
+        function renderDiscoverMessages() {
+            if (!discoverMessagesState.length) {
+                discoverMessages.innerHTML = '';
+                return;
+            }
+
+            discoverMessages.innerHTML = discoverMessagesState.map(message => {
+                const waitingClass = message.waiting ? ' waiting' : '';
+                const roleClass = message.role === 'user' ? ' user' : ' assistant';
+                return `<div class="chat-message${roleClass}${waitingClass}">${escapeHtml(message.text)}</div>`;
+            }).join('');
+
+            discoverMessages.scrollTop = discoverMessages.scrollHeight;
+        }
+
+        async function handleDiscoverAsk() {
+            const query = discoverInput.value.trim();
+            if (!query) {
+                return;
+            }
+
+            discoverMessagesState.push({ role: 'user', text: query });
+            const waitingIndex = discoverMessagesState.push({ role: 'assistant', text: 'Waiting...', waiting: true }) - 1;
+            discoverInput.value = '';
+            renderDiscoverMessages();
+
+            try {
+                const response = await fetch(`${CONFIG.apiBaseUrl}/discover`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, context: currentResults })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Discover API error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const answer = typeof data.response === 'string' && data.response.trim().length > 0
+                    ? data.response.trim()
+                    : 'No response received from chatbot.';
+
+                discoverMessagesState[waitingIndex] = { role: 'assistant', text: answer };
+            } catch (error) {
+                console.error('Discover API error:', error);
+                discoverMessagesState[waitingIndex] = {
+                    role: 'assistant',
+                    text: `I could not complete that request. ${error.message}`
+                };
+            }
+
+            renderDiscoverMessages();
         }
 
         // Utility: Escape HTML
